@@ -162,6 +162,40 @@ final class PrayerTimes {
         return m == 0 ? "dalam " + h + " j" : "dalam " + h + " j " + m + " min";
     }
 
+    /** Absolute wall-clock instant of the next prayer, including the next-day Subuh case. */
+    static long nextPrayerAtMillis(Day today, Day tomorrow, Calendar now) {
+        int nowMin = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE);
+        int index = next(today.minutes, nowMin);
+        Calendar target = (Calendar) now.clone();
+        int minuteOfDay;
+        if (index >= 0) {
+            minuteOfDay = today.minutes[index];
+        } else {
+            target.add(Calendar.DAY_OF_MONTH, 1);
+            minuteOfDay = (tomorrow != null ? tomorrow : today).minutes[0];
+        }
+        target.set(Calendar.HOUR_OF_DAY, minuteOfDay / 60);
+        target.set(Calendar.MINUTE, minuteOfDay % 60);
+        target.set(Calendar.SECOND, 0);
+        target.set(Calendar.MILLISECOND, 0);
+        return target.getTimeInMillis();
+    }
+
+    /** Remaining whole seconds, rounded up so the final second is not skipped. */
+    static long secondsUntil(long targetMillis, long nowMillis) {
+        if (targetMillis <= nowMillis) return 0L;
+        return (targetMillis - nowMillis + 999L) / 1000L;
+    }
+
+    /** Live TV countdown: HH:MM:SS. */
+    static String countdownSeconds(long secondsLeft) {
+        long total = Math.max(0L, secondsLeft);
+        long hours = total / 3600L;
+        long minutes = (total % 3600L) / 60L;
+        long seconds = total % 60L;
+        return String.format(Locale.ROOT, "%02d:%02d:%02d", hours, minutes, seconds);
+    }
+
     /** "05:49" in 24-hour time, "5:49" in 12-hour time (the clock beside it says AM or PM). */
     static String format(int minutes, boolean is24) {
         int h = minutes / 60, m = minutes % 60;

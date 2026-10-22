@@ -44,6 +44,10 @@ final class IslamicDream {
     private final TextView[] cellNames = new TextView[cells.length], cellTimes = new TextView[cells.length];
     private final View[] rules = new View[cells.length - 1];
     private int nextShown = -2;
+    private String displayedPrayerDayKey;
+    private PrayerTimes.Day displayedPrayerDay;
+    private String cachedTomorrowKey;
+    private PrayerTimes.Day cachedTomorrow;
     private final View verse;
     private final List<String[]> verses = new ArrayList<>();
     private final Random random = new Random();
@@ -196,45 +200,72 @@ final class IslamicDream {
         Calendar now = Calendar.getInstance();
         day.setText(DAYS[now.get(Calendar.DAY_OF_WEEK) - 1]);
         date.setText(now.get(Calendar.DAY_OF_MONTH) + " " + MONTHS[now.get(Calendar.MONTH)] + " " + now.get(Calendar.YEAR));
-        PrayerTimes.Day today = PrayerTimes.day(ctx, zone, PrayerTimes.key(now));
+        String todayKey = PrayerTimes.key(now);
+        PrayerTimes.Day today = PrayerTimes.day(ctx, zone, todayKey);
+        displayedPrayerDayKey = todayKey;
+        displayedPrayerDay = today;
         if (today == null) {
             hijri.setVisibility(View.GONE);
             prayers.setVisibility(View.GONE);
             next.setVisibility(View.GONE);
+            nextShown = -2;
             return;
         }
         hijri.setText(today.hijri);
         hijri.setVisibility(today.hijri.isEmpty() ? View.GONE : View.VISIBLE);
-        int nowMin = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE);
-        int n = PrayerTimes.next(today.minutes, nowMin);
         boolean is24 = android.text.format.DateFormat.is24HourFormat(ctx);
-        // After Isyak, tomorrow's Subuh is the one framed.
-        int framed = n >= 0 ? n : 0;
         for (int i = 0; i < cells.length; i++) {
             cellTimes[i].setText(PrayerTimes.format(today.minutes[i], is24));
-            if (framed == nextShown) continue;
-            boolean on = i == framed;
-            cells[i].setBackgroundResource(on ? R.drawable.prayer_cell_next : 0);
-            cellNames[i].setTextColor(on ? 0xFFE9CB7E : 0xB3F4EEDC);
-            cellTimes[i].setTextColor(on ? 0xFFF2CF7A : 0xFFF4EEDC);
-            cellTimes[i].setShadowLayer(on ? 8f : 0f, 0, 0, 0x66E9CB7E);
-        }
-        nextShown = framed;
-        // The rules either side of the framed cell give way to its frame.
-        for (int i = 0; i < rules.length; i++) {
-            rules[i].setVisibility(i == framed - 1 || i == framed ? View.INVISIBLE : View.VISIBLE);
+            cellTimes[i].setTextColor(0xFFFF5252);
         }
         prayers.setVisibility(View.VISIBLE);
-        int left;
-        if (n >= 0) {
-            left = today.minutes[n] - nowMin;
-        } else {
-            Calendar t = (Calendar) now.clone();
-            t.add(Calendar.DAY_OF_MONTH, 1);
-            PrayerTimes.Day tomorrow = PrayerTimes.day(ctx, zone, PrayerTimes.key(t));
-            left = 24 * 60 - nowMin + (tomorrow != null ? tomorrow : today).minutes[0];
+        updatePrayerCountdown(today, now);
+    }
+
+    /** Per-second refresh that uses the cached JAKIM day; no repeated annual JSON read. */
+    void second() {
+        Calendar now = Calendar.getInstance();
+        String todayKey = PrayerTimes.key(now);
+        if (!todayKey.equals(displayedPrayerDayKey)) {
+            update();
+            return;
         }
-        next.setText(PrayerTimes.NAMES[n >= 0 ? n : 0] + " " + PrayerTimes.countdown(left));
+        if (displayedPrayerDay != null) updatePrayerCountdown(displayedPrayerDay, now);
+    }
+
+    private PrayerTimes.Day tomorrow(Calendar now) {
+        Calendar t = (Calendar) now.clone();
+        t.add(Calendar.DAY_OF_MONTH, 1);
+        String key = PrayerTimes.key(t);
+        if (!key.equals(cachedTomorrowKey)) {
+            cachedTomorrowKey = key;
+            cachedTomorrow = PrayerTimes.day(ctx, zone, key);
+        }
+        return cachedTomorrow;
+    }
+
+    private void updatePrayerCountdown(PrayerTimes.Day today, Calendar now) {
+        int nowMin = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE);
+        int n = PrayerTimes.next(today.minutes, nowMin);
+        int framed = n >= 0 ? n : 0;
+        if (framed != nextShown) {
+            for (int i = 0; i < cells.length; i++) {
+                boolean on = i == framed;
+                cells[i].setBackgroundResource(on ? R.drawable.prayer_cell_next : 0);
+                cellNames[i].setTextColor(on ? 0xFFE9CB7E : 0xB3F4EEDC);
+                // All clock values stay red; the next prayer is identified by its gold frame/name.
+                cellTimes[i].setTextColor(0xFFFF5252);
+                cellTimes[i].setShadowLayer(on ? 4f : 0f, 0, 0, 0x66525252);
+            }
+            nextShown = framed;
+            for (int i = 0; i < rules.length; i++) {
+                rules[i].setVisibility(i == framed - 1 || i == framed ? View.INVISIBLE : View.VISIBLE);
+            }
+        }
+        PrayerTimes.Day nextDay = n < 0 ? tomorrow(now) : null;
+        long targetMillis = PrayerTimes.nextPrayerAtMillis(today, nextDay, now);
+        long secondsLeft = PrayerTimes.secondsUntil(targetMillis, now.getTimeInMillis());
+        next.setText(PrayerTimes.NAMES[n >= 0 ? n : 0] + " " + PrayerTimes.countdownSeconds(secondsLeft));
         next.setVisibility(View.VISIBLE);
     }
 

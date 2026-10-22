@@ -1,0 +1,46 @@
+name: Android Feature CI
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+    paths:
+      - "launcher/**"
+      - "themes/islamik/config.json"
+      - ".github/workflows/android-feature-ci.yml"
+  pull_request:
+    paths:
+      - "launcher/**"
+      - "themes/islamik/config.json"
+      - ".github/workflows/android-feature-ci.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Android unit tests and debug/release builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platforms;android-34 build-tools;34.0.0
+      - name: Check patch formatting
+        run: |
+          git fetch origin main
+          # Keep upstream wrapper CRLF and the font-license notice byte-for-byte intact.
+          git diff --check origin/main...HEAD -- . ':(exclude)launcher/gradlew.bat' ':(exclude)launcher/FONT-LICENSE-OFL.txt'
+      - name: Unit tests and build (no device install)
+        working-directory: launcher
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon testDebugUnitTest assembleDebug testReleaseUnitTest assembleRelease
+          size=$(stat -c %s app/build/outputs/apk/release/app-release.apk)
+          echo "release APK: $((size / 1024)) KB"
+          test "$size" -lt 409600 || { echo "Release APK exceeds the project's 400 KB limit"; exit 1; }

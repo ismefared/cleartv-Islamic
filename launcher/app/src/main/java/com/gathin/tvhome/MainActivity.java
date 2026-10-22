@@ -133,6 +133,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private TextView prayerRow;
     private String prayerZone;
     private boolean prayerRefreshRunning;
+    /** Small per-date cache so the one-second countdown tick does not reread annual JSON every second. */
+    private final java.util.Map<String, PrayerTimes.Day> prayerDays = new java.util.HashMap<>();
+    /** Avoid rereading the disk/prefs every second if today's prayer schedule is missing. */
+    private String prayerFetchCheckedKey;
+    private long prayerFetchCheckedAt;
     /** The azan over Home at prayer times; null when the theme turns it off or has no prayer_zone. */
     private Azan azan;
     private boolean azanReducedMotion;
@@ -237,6 +242,16 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             reloadApps(false);
         }
     };
+    /** Updates only the prayer row each second; heavier launcher maintenance stays on minuteTick. */
+    private final Runnable prayerSecondTick = new Runnable() {
+        @Override public void run() {
+            updatePrayerTimes();
+            if (!isFinishing() && !isDestroyed() && prayerZone != null && !prayerZone.isEmpty()) {
+                handler.postDelayed(this, 1000L);
+            }
+        }
+    };
+
     private final Runnable minuteTick = new Runnable() {
         @Override
         public void run() {
@@ -706,6 +721,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         updateInputsButton();
         startWallpaperRotation();
         handler.postDelayed(minuteTick, MINUTE_MS);
+        handler.removeCallbacks(prayerSecondTick);
+        if (prayerZone != null && !prayerZone.isEmpty()) handler.postDelayed(prayerSecondTick, 1000L);
         handler.removeCallbacks(cacheClean);
         handler.postDelayed(cacheClean, CacheCleaner.IDLE_MS);
         hiddenSinceResume = false;
@@ -792,6 +809,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         super.onPause();
         unregisterReceiver(packageReceiver);
         handler.removeCallbacks(minuteTick);
+        handler.removeCallbacks(prayerSecondTick);
         handler.removeCallbacks(wallTick);
         if (azan != null) azan.stop();
         Azan.homeResumed = false;
@@ -820,6 +838,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacks(prayerSecondTick);
         super.onDestroy();
         wallDecoder.shutdownNow();
         ConnectivityManager cm = getSystemService(ConnectivityManager.class);
@@ -1518,41 +1537,65 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      * Today's five prayer times, the next one bright with how long until it. Fetches the year from
      * e-Solat in the background when today is not on disk yet; until then the row stays hidden.
      */
+    /** Return a cached JAKIM day; null is cached too until a date change or a successful refresh. */
+    private PrayerTimes.Day cachedPrayerDay(String key) {
+        if (prayerDays.containsKey(key)) return prayerDays.get(key);
+        PrayerTimes.Day loaded = PrayerTimes.day(this, prayerZone, key);
+        if (prayerDays.size() >= 3) prayerDays.clear();
+        prayerDays.put(key, loaded);
+        return loaded;
+    }
+
+    /**
+     * Today's five JAKIM prayer times and a live countdown to the next one.
+     * Prayer data is cached in memory so the per-second refresh remains lightweight on low-memory TVs.
+     */
     private void updatePrayerTimes() {
-        if (prayerZone == null || prayerZone.isEmpty()) return;
+        if (prayerZone == null || prayerZone.isEmpty() || prayerRow == null) return;
         java.util.Calendar now = java.util.Calendar.getInstance();
         String todayKey = PrayerTimes.key(now);
-        PrayerTimes.Day today = PrayerTimes.day(this, prayerZone, todayKey);
+        PrayerTimes.Day today = cachedPrayerDay(todayKey);
         if (today == null) {
             prayerRow.setVisibility(View.GONE);
-            if (!prayerRefreshRunning && PrayerTimes.due(this, prayerZone, todayKey)) {
-                prayerRefreshRunning = true;
-                final String zone = prayerZone;
-                new Thread(() -> {
-                    boolean ok = PrayerTimes.refresh(getApplicationContext(), zone);
-                    handler.post(() -> {
-                        prayerRefreshRunning = false;
-                        if (ok) AzanAlarm.scheduleNext(getApplicationContext());
-                        if (ok && !isDestroyed()) updatePrayerTimes();
-                    });
-                }, "prayer-times").start();
+            long checkAt = System.currentTimeMillis();
+            boolean checkDue = !todayKey.equals(prayerFetchCheckedKey)
+                    || checkAt - prayerFetchCheckedAt >= 60_000L;
+            if (checkDue) {
+                prayerFetchCheckedKey = todayKey;
+                prayerFetchCheckedAt = checkAt;
+                if (!prayerRefreshRunning && PrayerTimes.due(this, prayerZone, todayKey)) {
+                    prayerRefreshRunning = true;
+                    final String zone = prayerZone;
+                    new Thread(() -> {
+                        boolean ok = PrayerTimes.refresh(getApplicationContext(), zone);
+                        handler.post(() -> {
+                            prayerRefreshRunning = false;
+                            if (ok) {
+                                prayerDays.clear();
+                                prayerFetchCheckedKey = null;
+                                AzanAlarm.scheduleNext(getApplicationContext());
+                            }
+                            if (ok && !isDestroyed()) updatePrayerTimes();
+                        });
+                    }, "prayer-times").start();
+                }
             }
             return;
         }
+
         int nowMin = now.get(java.util.Calendar.HOUR_OF_DAY) * 60 + now.get(java.util.Calendar.MINUTE);
         int next = PrayerTimes.next(today.minutes, nowMin);
-        int left;
-        if (next >= 0) {
-            left = today.minutes[next] - nowMin;
-        } else {
-            // After Isyak, the next is tomorrow's Subuh.
+        PrayerTimes.Day tomorrow = null;
+        if (next < 0) {
             java.util.Calendar t = (java.util.Calendar) now.clone();
             t.add(java.util.Calendar.DAY_OF_MONTH, 1);
-            PrayerTimes.Day tomorrow = PrayerTimes.day(this, prayerZone, PrayerTimes.key(t));
-            left = 24 * 60 - nowMin + (tomorrow != null ? tomorrow : today).minutes[0];
+            tomorrow = cachedPrayerDay(PrayerTimes.key(t));
         }
+        long targetMillis = PrayerTimes.nextPrayerAtMillis(today, tomorrow, now);
+        long secondsLeft = PrayerTimes.secondsUntil(targetMillis, now.getTimeInMillis());
+
         boolean is24 = android.text.format.DateFormat.is24HourFormat(this);
-        int bright = 0xFFFFFFFF, dim = 0x80FFFFFF;
+        int bright = 0xFFFFFFFF, dim = 0x80FFFFFF, prayerRed = 0xFFFF5252;
         android.text.SpannableStringBuilder b = new android.text.SpannableStringBuilder();
         if (!today.hijri.isEmpty()) {
             b.append(today.hijri);
@@ -1562,15 +1605,21 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         for (int i = 0; i < today.minutes.length; i++) {
             if (i > 0) b.append("    ");
             int start = b.length();
-            b.append(PrayerTimes.NAMES[i]).append("  ").append(PrayerTimes.format(today.minutes[i], is24));
+            b.append(PrayerTimes.NAMES[i]).append("  ");
+            int timeStart = b.length();
+            b.append(PrayerTimes.format(today.minutes[i], is24));
+            // Prayer-time values remain red even for the next upcoming prayer.
+            b.setSpan(new android.text.style.ForegroundColorSpan(prayerRed), timeStart, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             if (i == next) {
-                b.setSpan(new android.text.style.ForegroundColorSpan(bright), start, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                // Keep the upcoming prayer name emphasized without replacing the red time value.
+                b.setSpan(new android.text.style.ForegroundColorSpan(bright), start, timeStart, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
                 b.setSpan(new android.text.style.StyleSpan(android.graphics.Typeface.BOLD), start, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
             }
         }
         b.append("     ");
         int start = b.length();
-        b.append(PrayerTimes.NAMES[next >= 0 ? next : 0]).append(" ").append(PrayerTimes.countdown(left));
+        b.append(PrayerTimes.NAMES[next >= 0 ? next : 0]).append(" ")
+                .append(PrayerTimes.countdownSeconds(secondsLeft));
         b.setSpan(new android.text.style.ForegroundColorSpan(bright), start, b.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
         prayerRow.setText(b);
         prayerRow.setVisibility(View.VISIBLE);

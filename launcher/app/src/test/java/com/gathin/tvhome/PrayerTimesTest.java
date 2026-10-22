@@ -36,4 +36,38 @@ public class PrayerTimesTest {
         assertEquals("05:49", PrayerTimes.format(349, true));
         assertEquals("1:01", PrayerTimes.format(781, false));
     }
+
+    @Test
+    public void formatsLiveCountdownAsHoursMinutesSeconds() {
+        assertEquals("00:00:00", PrayerTimes.countdownSeconds(0));
+        assertEquals("00:00:01", PrayerTimes.countdownSeconds(1));
+        assertEquals("00:01:00", PrayerTimes.countdownSeconds(60));
+        assertEquals("01:05:09", PrayerTimes.countdownSeconds(3909));
+        assertEquals("24:00:00", PrayerTimes.countdownSeconds(86400));
+        assertEquals("00:00:00", PrayerTimes.countdownSeconds(-15));
+        assertEquals(1L, PrayerTimes.secondsUntil(1999L, 1000L));
+        assertEquals(1L, PrayerTimes.secondsUntil(1001L, 1000L));
+        assertEquals(0L, PrayerTimes.secondsUntil(1000L, 1000L));
+        assertEquals(0L, PrayerTimes.secondsUntil(999L, 1000L));
+    }
+
+    @Test
+    public void countdownUsesAbsolutePrayerTimeAndRollsOverMidnight() {
+        java.util.TimeZone utc = java.util.TimeZone.getTimeZone("UTC");
+        java.util.Calendar now = java.util.Calendar.getInstance(utc, java.util.Locale.ROOT);
+        now.clear();
+        now.set(2026, java.util.Calendar.OCTOBER, 22, 5, 48, 59);
+        PrayerTimes.Day today = new PrayerTimes.Day(new int[]{349, 781, 978, 1140, 1210}, "");
+        assertEquals(1000L, PrayerTimes.nextPrayerAtMillis(today, null, now) - now.getTimeInMillis());
+
+        now.set(2026, java.util.Calendar.OCTOBER, 22, 5, 49, 0);
+        java.util.Calendar next = java.util.Calendar.getInstance(utc, java.util.Locale.ROOT);
+        next.setTimeInMillis(PrayerTimes.nextPrayerAtMillis(today, null, now));
+        assertEquals(13, next.get(java.util.Calendar.HOUR_OF_DAY));
+        assertEquals(1, next.get(java.util.Calendar.MINUTE));
+
+        now.set(2026, java.util.Calendar.OCTOBER, 22, 23, 59, 59);
+        PrayerTimes.Day tomorrow = new PrayerTimes.Day(new int[]{350, 782, 979, 1141, 1211}, "");
+        assertEquals(21001000L, PrayerTimes.nextPrayerAtMillis(today, tomorrow, now) - now.getTimeInMillis());
+    }
 }
