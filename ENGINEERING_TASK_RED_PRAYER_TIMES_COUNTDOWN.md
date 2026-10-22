@@ -1,9 +1,9 @@
 # Engineering task: Red prayer-time values + animated next-prayer countdown
 
-## Repository status / prerequisite
-This repository currently contains only README.md. It does not currently contain the Android app source tree (for example, `launcher/app/src/main/java/com/gathin/tvhome/MainActivity.java`, `PrayerTimes.java`, and `IslamicDream.java`). Do not fabricate or replace these source files with speculative implementations.
+## Repository status
+The personal repository originally contained only a README. The Android launcher source, resources, Gradle wrapper, tests, themes and supporting tools have now been imported from the MIT-licensed upstream repository `Pokka99/cleartv-Islamic` into this feature branch. The old prebuilt APK was intentionally excluded.
 
-**First required action:** import/push the actual, known-working `cleartv-Islamic` source tree into this repository while preserving the installed Mi TV Stick baseline. Confirm the imported source corresponds to the build currently working on the device before editing.
+Importing the upstream source does **not** independently prove that it is byte-for-byte identical to the APK currently installed on the physical Mi TV Stick. Keep the existing device baseline untouched, and do not install or upgrade any APK until package identity, signing certificate and upgrade compatibility have been verified.
 
 ## Objective
 Implement both UX enhancements throughout applicable prayer-time screens:
@@ -58,4 +58,4 @@ Once actual source is present:
 ## Delivery
 - Keep changes on this feature branch and open a pull request to `main` only after source has been imported, changes implemented, and checks run.
 - Report exact commit/PR links, changed files, test commands and raw outcomes.
-- Mark checks honestly as PASS / FAIL / BLOCKED / NOT RUN. The task is not complete while the repository lacks the real app source or while mandatory tests remain unrun.
+- Mark checks honestly as PASS / FAIL / BLOCKED / NOT RUN. At the current implementation revision, formatting checks, Debug/Release unit tests and Debug/Release builds have passed in GitHub Actions. Visual QA on a 1920x1080 emulator or the physical TV remains a separate pending step; no physical TV interaction or APK installation has been performed.
